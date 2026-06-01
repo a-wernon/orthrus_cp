@@ -1,53 +1,27 @@
 """Frozen Orthrus backbone wrapper.
 
 Responsibilities:
-  - locate / install the orthrus package (added to sys.path if not installed)
-  - load the Orthrus checkpoint, freeze all parameters
-  - expose .forward_features(input_ids, ar_seq_len, anchor_positions) which
-    returns (h_diff, h_pool, teacher_logits) for B anchor blocks.
+  - load the Orthrus checkpoint via `AutoModelForCausalLM.from_pretrained(...,
+    trust_remote_code=True)` — matches the model card's recipe, and pulls
+    the modeling code straight from the Hub repo so we don't have to track
+    the local `orthrus/` clone.
+  - freeze all parameters, expose .forward_features() which returns
+    (h_diff, h_pool, teacher_logits, target_tokens) for B anchor blocks.
 
-We do NOT reimplement the dual-pass attention or diffusion masking — we
-call into the released Orthrus model code. We DO insert a thin extraction
-layer that pulls diffusion hidden states at the anchor block positions
-and AR teacher logits at the same clean-context positions.
+We do NOT reimplement the dual-pass attention — we call the released model's
+forward with `is_diffusion_pass=True`, `ar_seq_len`, `causal_limit`. We DO
+insert a thin extraction layer that pulls diffusion hidden states at the
+anchor block positions and AR teacher logits at the clean-context positions.
 """
 
 from __future__ import annotations
 
-import os
-import sys
 from dataclasses import dataclass
-from pathlib import Path
 
 import torch
 import torch.nn as nn
 from loguru import logger
-
-
-def _ensure_orthrus_on_path() -> None:
-    """Add ../orthrus to sys.path if the package isn't already importable."""
-    try:
-        import orthrus  # noqa: F401
-        return
-    except ImportError:
-        pass
-    here = Path(__file__).resolve().parent
-    candidate = here.parents[1] / "orthrus"  # repo-sibling layout
-    if candidate.exists() and str(candidate) not in sys.path:
-        sys.path.insert(0, str(candidate))
-        logger.info(f"added {candidate} to sys.path for orthrus import")
-
-
-_ensure_orthrus_on_path()
-
-try:
-    from src.model import OrthrusLM
-    from src.configuration import OrthrusConfig
-except ImportError:
-    # When orthrus is installed as a package, layout may differ — try
-    # `orthrus.src.model` as a fallback.
-    from orthrus.src.model import OrthrusLM  # type: ignore
-    from orthrus.src.configuration import OrthrusConfig  # type: ignore
+from transformers import AutoModelForCausalLM
 
 
 @dataclass
@@ -78,12 +52,22 @@ class FrozenOrthrus(nn.Module):
         attn_implementation: str = "flash_attention_2",
     ):
         super().__init__()
-        logger.info(f"loading Orthrus checkpoint: {checkpoint}")
-        self.model = OrthrusLM.from_pretrained(
-            checkpoint,
-            torch_dtype=dtype,
-            attn_implementation=attn_implementation,
-        )
+        logger.info(f"loading Orthrus checkpoint: {checkpoint} ({attn_implementation})")
+        try:
+            self.model = AutoModelForCausalLM.from_pretrained(
+                checkpoint,
+                dtype=dtype,
+                attn_implementation=attn_implementation,
+                trust_remote_code=True,
+            )
+        except TypeError:
+            # Older transformers used `torch_dtype` instead of `dtype`.
+            self.model = AutoModelForCausalLM.from_pretrained(
+                checkpoint,
+                torch_dtype=dtype,
+                attn_implementation=attn_implementation,
+                trust_remote_code=True,
+            )
         for p in self.model.parameters():
             p.requires_grad_(False)
         self.model.eval()

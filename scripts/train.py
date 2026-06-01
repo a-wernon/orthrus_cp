@@ -69,6 +69,7 @@ def main(cfg: DictConfig) -> None:
     frozen = FrozenOrthrus(
         cfg.model.checkpoint,
         dtype=getattr(torch, cfg.model.dtype),
+        attn_implementation=cfg.model.attn_implementation,
     )
     frozen.model.to(device)
 
