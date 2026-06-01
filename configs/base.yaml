@@ -1,0 +1,56 @@
+defaults:
+  - _self_
+  - head: cp
+  - train: h1
+
+run_name: ${head.name}
+
+model:
+  checkpoint: ???
+  dtype: bfloat16
+  block_size: 32
+  mask_token_id: null
+
+clustering:
+  num_clusters: 2048
+  cache_dir: cache/clusters
+  cache_key: ${checkpoint_slug:${model.checkpoint}}_C${clustering.num_clusters}
+  source: kmeans
+  kmeans:
+    n_init: 4
+    max_iter: 100
+    batch_size: 8192
+    seed: 42
+  force_recompute: false
+
+data:
+  dataset: nvidia/Nemotron-Post-Training-Dataset-v2
+  split: train
+  seq_len: 2048
+  anchors_per_seq: 32
+  num_workers: 4
+  shuffle_buffer: 1000
+  tokenizer: ${model.checkpoint}
+  pad_token_id: null
+  seed: 42
+
+eval:
+  every_steps: 1000
+  max_batches: 50
+  acceptance_max_K: 32
+
+logging:
+  log_dir: runs/${run_name}
+  tb_flush_secs: 30
+  ema_alpha: 0.98
+
+checkpointing:
+  save_dir: checkpoints/${run_name}
+  save_every_steps: 2000
+  keep_last: 3
+
+hydra:
+  run:
+    dir: outputs/${run_name}/${now:%Y-%m-%d_%H-%M-%S}
+  job:
+    chdir: false

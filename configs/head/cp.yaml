@@ -1,0 +1,10 @@
+name: cp_cluster
+kind: cp_cluster
+rank: 16
+pool: mean
+tie_token_embeddings: true
+init_scale: 0.02
+loss:
+  use_marginal_kl: true
+  marginal_kl_weight: 0.5
+  entropy_reg: 0.1

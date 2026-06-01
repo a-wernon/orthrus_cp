@@ -1,0 +1,15 @@
+defaults:
+  - base
+  - _self_
+
+run_name: clustering_C${clustering.num_clusters}
+
+clustering:
+  eval_recall:
+    enable: true
+    n_prompts: 200
+    dataset: nvidia/Nemotron-Post-Training-Dataset-v2
+    split: train
+    top_k: 32
+    seq_len: 512
+    num_continuations: 32

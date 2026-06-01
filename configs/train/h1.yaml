@@ -1,0 +1,14 @@
+# Single H200 defaults
+micro_batch_size: 2
+grad_accum_steps: 8
+seq_len_train: ${data.seq_len}
+max_steps: 8000
+warmup_ratio: 0.05
+peak_lr: 2.0e-4
+min_lr_ratio: 0.1
+weight_decay: 0.01
+beta1: 0.9
+beta2: 0.95
+grad_clip: 1.0
+compile: false
+seed: 42

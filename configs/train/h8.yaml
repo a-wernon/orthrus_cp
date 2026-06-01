@@ -1,0 +1,16 @@
+# 8x H200 scale: same effective batch as Orthrus paper (128) with FSDP-2
+micro_batch_size: 2
+grad_accum_steps: 8
+seq_len_train: ${data.seq_len}
+max_steps: 30000
+warmup_ratio: 0.05
+peak_lr: 2.0e-4
+min_lr_ratio: 0.1
+weight_decay: 0.01
+beta1: 0.9
+beta2: 0.95
+grad_clip: 1.0
+compile: false
+seed: 42
+
+# Effective global batch = micro * grad_accum * world_size = 2 * 8 * 8 = 128

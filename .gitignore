@@ -1,0 +1,21 @@
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+.venv*/
+venv/
+*.egg-info/
+build/
+dist/
+
+# experiment outputs
+runs/
+checkpoints/
+cache/
+outputs/
+multirun/
+
+# editor / OS
+.idea/
+.vscode/
+.DS_Store
