@@ -3,27 +3,50 @@ requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "orthrus_cp"
-version = "0.0.1"
-description = "Orthrus + CP-cluster head: head-only training on a frozen Orthrus backbone"
+name = "orthrus"
+version = "0.1.0"
+description = "Memory-Efficient Parallel Token Generation via Dual-View Diffusion"
 readme = "README.md"
 requires-python = ">=3.10"
 
+authors = [
+    { name = "Chien Van Nguyen", email = "chienn@uoregon.edu" }
+]
+
+license = "Apache-2.0"
+
 dependencies = [
-    "torch>=2.10.0",
+    "torch==2.11.0",
     "transformers>=5.8.0",
     "accelerate>=1.13.0",
-    "datasets>=3.0.0",
     "numpy",
-    "scikit-learn>=1.3",
-    "hydra-core>=1.3",
-    "tensorboard>=2.14",
-    "loguru",
-    "tqdm",
+    "flash-attn>=2.7.0",
+    "hydra-core>=1.3.2",
+    "loguru>=0.7.3",
+    "scikit-learn>=1.7.2",
+    "datasets>=4.8.5",
+    "tensorboard>=2.20.0",
 ]
+
+[project.optional-dependencies]
+benchmark = ["datasets", "tqdm"]
+viz = ["matplotlib"]
+
+[project.urls]
+Repository = "https://github.com/chiennv2000/orthrus"
+
+# CUDA wheels — do not resolve torch from PyPI (CPU-only).
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu128" }
+
+[tool.uv]
+# flash-attn must build against the already-installed torch.
+no-build-isolation-package = ["flash-attn"]
 
 [tool.setuptools.packages.find]
 include = ["ocp*"]
-
-[tool.uv.sources]
-orthrus = { path = "../orthrus", editable = true }

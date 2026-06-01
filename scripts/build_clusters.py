@@ -20,6 +20,7 @@ import hydra
 import torch
 from loguru import logger
 from omegaconf import DictConfig, OmegaConf
+from tqdm import tqdm
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -74,7 +75,7 @@ def main(cfg: DictConfig) -> None:
 
 def _run_recall_diagnostic(cfg, clusters: ClusterSystem) -> None:
     """Sample N prompts, run AR teacher one step, measure cluster recall at top-k."""
-    import os
+    import gc
     from datasets import load_dataset
     from transformers import AutoTokenizer
 
@@ -91,29 +92,39 @@ def _run_recall_diagnostic(cfg, clusters: ClusterSystem) -> None:
 
     all_logits = []
     count = 0
-    for example in ds:
-        text = example.get("text") or "\n".join(
-            f"{m.get('role','')}: {m.get('content','')}" for m in (example.get("messages") or [])
-        )
-        if not text:
-            continue
-        ids = tokenizer.encode(text, add_special_tokens=False)[:seq_len]
-        if len(ids) < 16:
-            continue
-        ids_t = torch.tensor(ids, device=device).unsqueeze(0)
-        # run AR teacher (not the diffusion path) to get a next-token distribution
-        # at every position in the sequence
-        with torch.no_grad():
-            base_out = frozen.model.model(
-                input_ids=ids_t,
-                is_diffusion_pass=False,
-                use_cache=False,
+    ds_iter = iter(ds)
+    progress = tqdm(ds_iter)
+    try:
+        for example in progress:
+            text = example.get("text") or "\n".join(
+                f"{m.get('role','')}: {m.get('content','')}" for m in (example.get("messages") or [])
             )
-            logits = frozen.model.lm_head(base_out.last_hidden_state).float()  # [1, L, V]
-        all_logits.append(logits.squeeze(0))
-        count += 1
-        if count >= n:
-            break
+            if not text:
+                continue
+            ids = tokenizer.encode(text, add_special_tokens=False)[:seq_len]
+            if len(ids) < 16:
+                continue
+            ids_t = torch.tensor(ids, device=device).unsqueeze(0)
+            # run AR teacher (not the diffusion path) to get a next-token distribution
+            # at every position in the sequence
+            with torch.no_grad():
+                base_out = frozen.model.model(
+                    input_ids=ids_t,
+                    is_diffusion_pass=False,
+                    use_cache=False,
+                )
+                logits = frozen.model.lm_head(base_out.last_hidden_state).float()  # [1, L, V]
+            all_logits.append(logits.squeeze(0))
+            count += 1
+            if count >= n:
+                break
+    finally:
+        progress.close()
+        close = getattr(ds_iter, "close", None)
+        if close is not None:
+            close()
+        del ds_iter
+        del ds
 
     teacher_logits = torch.cat(all_logits, dim=0)                              # [N*L, V]
     metrics = cluster_recall_at_k(teacher_logits, clusters.to(device), top_k=top_k)
@@ -126,6 +137,10 @@ def _run_recall_diagnostic(cfg, clusters: ClusterSystem) -> None:
     payload = cache.load(cfg.clustering.cache_key)
     payload["recall"] = metrics
     cache.save(cfg.clustering.cache_key, payload)
+
+    del teacher_logits, all_logits, frozen
+    gc.collect()
+    torch.cuda.empty_cache() if torch.cuda.is_available() else None
 
 
 if __name__ == "__main__":
