@@ -120,6 +120,49 @@ class ClusterHead(nn.Module):
         logits = logits.masked_fill(~valid, float("-inf"))
         return logits.log_softmax(dim=-1)                                   # [B, K, tpc]
 
+    def target_token_log_probs(
+        self,
+        h_diff: torch.Tensor,        # [B, K, d]
+        target_tokens: torch.Tensor, # [B, K]
+        target_clusters: torch.Tensor, # [B, K]
+    ) -> torch.Tensor:
+        """Lookup log p_theta(y_k* | c(y_k*), h_k) without dense cluster padding."""
+        if self._token_embed.numel() == 0:
+            raise RuntimeError("attach_token_embeddings(E) must be called once")
+
+        B, K, d = h_diff.shape
+        h_flat = h_diff.reshape(B * K, d)
+        token_flat = target_tokens.reshape(B * K)
+        cluster_flat = target_clusters.reshape(B * K)
+        out = torch.full(
+            (B * K,),
+            float("-inf"),
+            dtype=h_diff.dtype,
+            device=h_diff.device,
+        )
+
+        for c in cluster_flat.unique():
+            c_int = int(c.item())
+            row_mask = cluster_flat == c_int
+            token_ids = self.token_ordering[c_int]
+            token_ids = token_ids[token_ids >= 0]
+            if token_ids.numel() == 0:
+                continue
+
+            E_c = self._token_embed[token_ids].to(dtype=h_diff.dtype)        # [tpc_c, d]
+            logits = h_flat[row_mask] @ E_c.t()                              # [n_c, tpc_c]
+            logits = logits * self.token_gain[:token_ids.numel()].to(logits.dtype).view(1, -1)
+            logits = logits + self.token_bias[:token_ids.numel()].to(logits.dtype).view(1, -1)
+
+            targets = token_flat[row_mask]
+            matches = token_ids.view(1, -1) == targets.view(-1, 1)
+            any_match = matches.any(dim=-1)
+            pos = matches.float().argmax(dim=-1)
+            picked = logits.log_softmax(dim=-1).gather(-1, pos.unsqueeze(-1)).squeeze(-1)
+            out[row_mask] = torch.where(any_match, picked, torch.full_like(picked, float("-inf")))
+
+        return out.view(B, K)
+
     def gather_token_log_probs(
         self,
         log_p_token_in_cluster: torch.Tensor,   # [B, K, tpc] — already log-softmax

@@ -22,6 +22,7 @@ import torch
 import torch.nn as nn
 from loguru import logger
 from transformers import AutoModelForCausalLM
+from transformers.cache_utils import DynamicCache
 
 
 @dataclass
@@ -95,11 +96,11 @@ class FrozenOrthrus(nn.Module):
     ) -> FrozenFeatures:
         """Run one dual-pass forward and extract diffusion features + AR logits.
 
-        Layout follows Orthrus training: the input to the model is the
-        concatenation `[clean_seq, corrupted_blocks]` where each corrupted
-        block is `[x_{a}, <mask>, ..., <mask>]` (K positions). The dual-pass
-        attention mask routes clean tokens through causal AR attention and
-        corrupted blocks through bidirectional-within-block + causal-up-to-anchor.
+        Layout follows the released Orthrus model: first run the clean sequence
+        through the AR path to populate the KV cache, then run corrupted blocks
+        `[x_a, <mask>, ..., <mask>]` through the diffusion path against that
+        cache. The dual-pass attention mask routes draft tokens through causal
+        AR cache tokens plus bidirectional attention within each draft block.
 
         For each (sequence, anchor) we extract:
           h_diff[b_block, k] = diffusion hidden state of the k-th position
@@ -130,38 +131,50 @@ class FrozenOrthrus(nn.Module):
             anchor_positions.unsqueeze(-1).expand(B, A, K).reshape(B, A * K)
         ).long()                                                            # [B, A*K]
 
-        # 3) concat clean + corrupted along sequence, set is_diffusion_pass
-        full_ids = torch.cat([input_ids, blocks_flat], dim=1)               # [B, L + A*K]
+        # 3) populate the AR KV cache, then run the draft blocks as diffusion
+        # queries. Use an explicit additive mask with eager attention to avoid
+        # Orthrus' training-only compiled flex-attention path.
+        past_key_values = DynamicCache(config=self.model.config)
+        ar_position_ids = torch.arange(L, device=device).unsqueeze(0).expand(B, L)
+        Q = A * K
+        ar_idx = torch.arange(L, device=device).view(1, 1, L)
+        valid_ar = ar_idx <= causal_limit.unsqueeze(-1)                     # [B, Q, L]
+        q_block = torch.arange(Q, device=device).view(Q, 1) // K
+        kv_block = torch.arange(Q, device=device).view(1, Q) // K
+        valid_diff = (q_block == kv_block).unsqueeze(0).expand(B, Q, Q)      # [B, Q, Q]
+        valid_kv = torch.cat([valid_ar, valid_diff], dim=-1).unsqueeze(1)    # [B, 1, Q, L+Q]
+        diff_attention_mask = torch.zeros(
+            valid_kv.shape, dtype=self.dtype, device=device,
+        ).masked_fill(~valid_kv, torch.finfo(self.dtype).min)
 
-        out = self.model(
-            input_ids=full_ids,
-            is_diffusion_pass=True,
-            ar_seq_len=L,
-            causal_limit=causal_limit,
-            use_cache=False,
-            output_hidden_states=False,
-            output_attentions=False,
-        )
-        # `out.hidden_states[0]` would hold full hidden states — but the
-        # OrthrusLM.forward we read returns hidden_states as a single-tuple of
-        # the last hidden state. For robustness we re-run through .model
-        # below to recover it explicitly.
+        old_attn_implementation = self.model.config._attn_implementation
+        try:
+            ar_out = self.model(
+                input_ids=input_ids,
+                position_ids=ar_position_ids,
+                past_key_values=past_key_values,
+                use_cache=True,
+            )
 
-        # The OrthrusLM forward computes hidden_states then applies lm_head
-        # only to a slice. We need both the diffusion part of hidden_states
-        # (for our head) AND lm_head logits on the AR part. The cleanest path
-        # is to call self.model.model directly to get full hidden states.
-        base_out = self.model.model(
-            input_ids=full_ids,
-            is_diffusion_pass=True,
-            ar_seq_len=L,
-            causal_limit=causal_limit,
-            use_cache=False,
-        )
-        h_all = base_out.last_hidden_state                                  # [B, L + A*K, d]
+            diff_position_ids = (
+                anchor_positions.unsqueeze(-1) + torch.arange(K, device=device).view(1, 1, K)
+            ).reshape(B, A * K)
+            self.model.config._attn_implementation = "eager"
+            diff_out = self.model(
+                input_ids=blocks_flat,
+                attention_mask=diff_attention_mask,
+                position_ids=diff_position_ids,
+                past_key_values=past_key_values,
+                use_cache=False,
+                is_diffusion_pass=True,
+                ar_seq_len=L,
+                causal_limit=causal_limit,
+            )
+        finally:
+            self.model.config._attn_implementation = old_attn_implementation
 
-        h_clean = h_all[:, :L, :]                                           # [B, L, d]
-        h_blocks = h_all[:, L:, :].view(B, A, K, -1)                        # [B, A, K, d]
+        h_clean = ar_out.hidden_states[0]                                    # [B, L, d]
+        h_blocks = diff_out.hidden_states[0].view(B, A, K, -1)               # [B, A, K, d]
 
         # diffusion hidden states for the head: flatten (B, A) -> B_anchors
         h_diff = h_blocks.reshape(B * A, K, -1).to(self.dtype)              # [B*A, K, d]

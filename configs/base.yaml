@@ -8,6 +8,7 @@ run_name: ${head.name}
 model:
   checkpoint: ???
   dtype: bfloat16
+  attn_implementation: flash_attention_2
   block_size: 32
   mask_token_id: null
 

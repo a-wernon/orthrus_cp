@@ -26,6 +26,7 @@ dependencies = [
     "scikit-learn>=1.7.2",
     "datasets>=4.8.5",
     "tensorboard>=2.20.0",
+    "nvidia-cutlass>=4.2.0.0",
 ]
 
 [project.optional-dependencies]

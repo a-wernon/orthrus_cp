@@ -85,7 +85,8 @@ def main(cfg: DictConfig) -> None:
            if k not in {"name", "kind", "tie_token_embeddings", "init_scale", "loss"}
            and not k.startswith("_")},
     ).to(device)
-    head.attach_token_embeddings(frozen.input_embeddings.to(device).to(torch.bfloat16 if cfg.model.dtype == "bfloat16" else torch.float32))
+    head_dtype = next(p.dtype for p in head.parameters() if p.is_floating_point())
+    head.attach_token_embeddings(frozen.input_embeddings.to(device=device, dtype=head_dtype))
 
     if is_main_process():
         n_params = sum(p.numel() for p in head.parameters() if p.requires_grad)

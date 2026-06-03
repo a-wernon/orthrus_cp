@@ -19,3 +19,5 @@ multirun/
 .idea/
 .vscode/
 .DS_Store
+
+compiled_cache.db

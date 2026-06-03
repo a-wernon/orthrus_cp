@@ -48,7 +48,11 @@ def main(cfg: DictConfig) -> None:
         clusters = ClusterSystem.from_state(payload["clusters"])
     else:
         # Load the frozen backbone for its input embeddings only.
-        frozen = FrozenOrthrus(cfg.model.checkpoint, dtype=getattr(torch, cfg.model.dtype))
+        frozen = FrozenOrthrus(
+            cfg.model.checkpoint,
+            dtype=getattr(torch, cfg.model.dtype),
+            attn_implementation=cfg.model.attn_implementation,
+        )
         E = frozen.input_embeddings.detach().to(torch.float32).cpu()
         if cfg.clustering.source == "kmeans":
             clusters = build_kmeans_clusters(
@@ -81,7 +85,11 @@ def _run_recall_diagnostic(cfg, clusters: ClusterSystem) -> None:
 
     logger.info("running cluster-recall diagnostic")
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    frozen = FrozenOrthrus(cfg.model.checkpoint, dtype=getattr(torch, cfg.model.dtype))
+    frozen = FrozenOrthrus(
+        cfg.model.checkpoint,
+        dtype=getattr(torch, cfg.model.dtype),
+        attn_implementation=cfg.model.attn_implementation,
+    )
     frozen.model.to(device)
     tokenizer = AutoTokenizer.from_pretrained(cfg.model.checkpoint)
 

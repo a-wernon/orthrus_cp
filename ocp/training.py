@@ -70,9 +70,8 @@ def compute_loss(
 
     # --- L_NLL: joint over cluster trajectory + per-position token-in-cluster ---
     log_q_clusters = head_out.joint_log_prob(target_clusters)                              # [B]
-    log_p_token = head.restricted_token_log_probs(feats.h_diff, target_clusters)           # [B, K, tpc]
-    log_p_y_given_c = head.gather_token_log_probs(
-        log_p_token, target_tokens, target_clusters,
+    log_p_y_given_c = head.target_token_log_probs(
+        feats.h_diff, target_tokens, target_clusters,
     )                                                                                      # [B, K]
     # mask out positions with invalid targets (target outside cluster ordering)
     valid = torch.isfinite(log_p_y_given_c).all(dim=-1)                                    # [B]
@@ -188,6 +187,7 @@ def train_loop(
 
     head.train()
     frozen.eval()
+    head_dtype = next(p.dtype for p in head.parameters() if p.is_floating_point())
 
     for batch in dataloader:
         if step >= cfg.train.max_steps:
@@ -197,6 +197,13 @@ def train_loop(
 
         with torch.no_grad():
             feats = frozen.forward_features(input_ids, anchors)
+            if feats.h_diff.dtype != head_dtype:
+                feats = FrozenFeatures(
+                    h_diff=feats.h_diff.to(head_dtype),
+                    h_pool=feats.h_pool.to(head_dtype),
+                    teacher_logits=feats.teacher_logits,
+                    target_tokens=feats.target_tokens,
+                )
 
         head_out = head(feats.h_diff, feats.h_pool)
         loss, metrics = compute_loss(
